@@ -646,7 +646,29 @@ void execute(ipStream * st){
         write(fileno(stdout),"Invalid Use of Double Pipe\n",strlen("Invalid Use of Double Pipe\n"));
         exit(1);
       }
+      char *buf=NULL;
+      if(pipeChain){
+        buf = malloc(BUFSIZ * sizeof(char));
+        int n ;
+        memset(buf,'\0',BUFSIZ);
+        n=read(p1[0],buf,BUFSIZ-1);
+        if(n<0){
+          die("PIPE ERR");
+        }
+        buf[n+1]='\0';
+        close(p[0]);
+        close(p[1]);
+        close(p1[0]);
+        close(p1[1]);
+      }
       int pid = fork();
+      if(buf!=NULL){
+      pipe(p);
+      pipe(p1);
+      write(p1[1],buf,strlen(buf));
+      free(buf);
+      buf=NULL;
+    }
       if(pid == 0)
       { t->tok = PIPE1;
         memset(t->lex,'\0',strlen(t->lex));
@@ -690,7 +712,29 @@ void execute(ipStream * st){
         write(fileno(stdout),"Invalid Use of Triple Pipe\n",strlen("Invalid Use of Triple Pipe\n"));
         exit(1);
       }
+      char *buf=NULL;
+      if(pipeChain){
+        buf = malloc(BUFSIZ * sizeof(char));
+        int n ;
+        memset(buf,'\0',BUFSIZ);
+        n=read(p1[0],buf,BUFSIZ-1);
+        if(n<0){
+          die("PIPE ERR");
+        }
+        buf[n+1]='\0';
+        close(p[0]);
+        close(p[1]);
+        close(p1[0]);
+        close(p1[1]);
+      }
       int pid = fork();
+      if(buf!=NULL){
+      pipe(p);
+      pipe(p1);
+      write(p1[1],buf,strlen(buf));
+      free(buf);
+      buf=NULL;
+    }
       if(pid == 0)
       { t->tok = PIPE1;
         memset(t->lex,'\0',strlen(t->lex));
