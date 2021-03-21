@@ -874,6 +874,7 @@ void execute(ipStream * st){
         r=r->next;
       }
       if(has){
+        int fdout = dup(fileno(stdout));
         setvbuf(stdout,NULL,_IONBF,0);
         Node * oper = pr ->next;
         while(oper != NULL){
@@ -887,7 +888,7 @@ void execute(ipStream * st){
             }
             char * out = malloc(128*sizeof(char));
             sprintf(out,"PID %d Redirecting output: old %d to new %d\n",getpid(),fileno(stdout),fd);
-            write(fileno(stdout),out,strlen(out));
+            write(fdout,out,strlen(out));
             free(out);
             if(dup2(fd,fileno(stdout))<0){
               die("O/P redirection(>)");
@@ -904,7 +905,7 @@ void execute(ipStream * st){
             }
             char * out = malloc(128*sizeof(char));
             sprintf(out,"PID %d Redirecting output(Append mode): old %d to new %d\n",getpid(),fileno(stdout),fd);
-            write(fileno(stdout),out,strlen(out));
+            write(fdout,out,strlen(out));
             free(out);
             if(dup2(fd,fileno(stdout))<0){
               die("O/P redirection(>>)");
@@ -913,6 +914,7 @@ void execute(ipStream * st){
           }
           oper = oper->next;
         }
+        close(fdout);
       }
       close(p1[0]);
       close(p[1]);
