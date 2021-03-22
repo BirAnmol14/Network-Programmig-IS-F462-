@@ -108,12 +108,12 @@ void terminal(){
     char * usr = getenv("USER");
     write(fileno(stdout),usr,strlen(usr));
     write(fileno(stdout),"@",1);
-    char * name = getenv("NAME");
-    write(fileno(stdout),name,strlen(name));
+    //char * name = getenv("NAME");
+    //write(fileno(stdout),name,strlen(name));
     char * cwd = malloc(512 * sizeof(char));
     memset(cwd,'\0',512);
     getcwd(cwd,512);
-    write(fileno(stdout),":",1);
+    //write(fileno(stdout),":",1);
     write(fileno(stdout),cwd,strlen(cwd));
     free(cwd);
     write(fileno(stdout),"$ ",2);
@@ -648,7 +648,7 @@ void execute(ipStream * st){
       }
       char *buf=NULL;
       if(pipeChain){
-        buf = malloc(BUFSIZ * sizeof(char));
+        buf = malloc(3*BUFSIZ * sizeof(char));
         int n ;
         memset(buf,'\0',BUFSIZ);
         n=read(p1[0],buf,BUFSIZ-1);
@@ -714,7 +714,7 @@ void execute(ipStream * st){
       }
       char *buf=NULL;
       if(pipeChain){
-        buf = malloc(BUFSIZ * sizeof(char));
+        buf = malloc(3*BUFSIZ * sizeof(char));
         int n ;
         memset(buf,'\0',BUFSIZ);
         n=read(p1[0],buf,BUFSIZ-1);
@@ -969,7 +969,7 @@ int cmd_index=-1;
 void handleShortcut(ipStream * st,shortCmds * sc){
   if(st && st->head){
     Node * t = st->head;
-    if(t->tok==CMD1 && strcmp(t->lex,"sc")==0){
+    if(t->tok==CMD1 && strcmp(t->lex,"sc")==0 && t->next==NULL){
       if(!t->next){
         while(1){
           struct sigaction s_act;
@@ -1003,12 +1003,12 @@ void handleShortcut(ipStream * st,shortCmds * sc){
           char * usr = getenv("USER");
           write(fileno(stdout),usr,strlen(usr));
           write(fileno(stdout),"@",1);
-          char * name = getenv("NAME");
-          write(fileno(stdout),name,strlen(name));
+          //char * name = getenv("NAME");
+          //write(fileno(stdout),name,strlen(name));
           char * cwd = malloc(512 * sizeof(char));
           memset(cwd,'\0',512);
           getcwd(cwd,512);
-          write(fileno(stdout),":",1);
+          //write(fileno(stdout),":",1);
           write(fileno(stdout),cwd,strlen(cwd));
           free(cwd);
           write(fileno(stdout),"$ ",2);
