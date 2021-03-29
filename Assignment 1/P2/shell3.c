@@ -118,7 +118,7 @@ void terminal(){
     // if(jr<0){
     //   if(jr < 0)
     //     die("Process stat read error (terminal)");
-    // }
+    // } 
     if(!BGshell) {
       memset(op,'\0',128);
       sprintf(op,"#####################\nTerminal pid: %d(group: %d)\tStatus: %c\n",getpid(),getpgid(0),x);
@@ -142,7 +142,27 @@ void terminal(){
     int n;
     char *readBuf = malloc(BUFSIZ * sizeof(char));
     memset(readBuf,'\0',BUFSIZ);
-    n = read(fileno(stdin),readBuf,BUFSIZ-1);
+    long cmdLength = 0;
+    char cmdl[7];
+    while(1) {
+      n = read(fileno(stdin), cmdl, 6);
+      if(n == 0) {
+        sleep(1);
+        continue;
+      }
+      if(n < 0)
+        break;
+      fprintf(stderr, "READ1: %s\n", readBuf);
+      cmdl[6] = 0;
+      fprintf(stderr, "%s\n", cmdl);
+      cmdLength = strtol(cmdl, NULL, 10);
+      fprintf(stderr, "commandLength: %d\n", cmdLength);
+      n = read(fileno(stdin),readBuf,cmdLength);
+      fprintf(stderr, "READ2: %s\n", readBuf);
+      if(n > 0)
+        break;
+    }
+   
     if(n<0){
       die("terminal read error");
     }

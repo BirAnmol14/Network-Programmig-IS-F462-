@@ -219,7 +219,18 @@ void executeLocalCommand(char* cmd, int cmdLength) {
     shellInst* si = &shellList[0];
     if(si -> pid == -1)
         createShellInst(0, localUser);
-    cmd[cmdLength] = '\n';
+    
+    char cmdLengthStr[6];
+    int csl = sprintf(cmdLengthStr, "%d", cmdLength);
+    if(csl > 5)
+        errExit("too long command", 0);
+    cmdLengthStr[csl] = 0;
+    char cmdl[7] = "AAAAAA";
+    cmdl[6] = 0;
+    strncpy(cmdl, cmdLengthStr, strlen(cmdLengthStr));
+    
+    if(write(si -> pipein, cmdl, 6) == -1)
+        errExit("write", 1);
     if(write(si -> pipein, cmd, cmdLength) == -1)
         errExit("write", 1);
 }
@@ -251,20 +262,29 @@ int writeServerReqToShell(char* message, int messageLength) {
     if(!token) return -1;
     strncpy(user, token, strlen(token));
     user[strlen(token)] = 0;
-    char* cmdInput = token + strlen(token) + 1;
-    int cmdLength = messageLength - (int)(cmdInput - message);
-    // append EOT
-    cmdInput[cmdLength] = '\n';
-    cmdInput[cmdLength + 1] = '\x04';
-    cmdLength += 2;
+    token = strtok(NULL, " ");
+    if(!token) return -1;
+    char* cmdLengthStr = token;
+    int cmdLength = atoi(cmdLengthStr);
+    char* input = token + strlen(token) + 1;
+    int inputLength = messageLength - (int)(input - message);
 
     shellInst* si = &shellList[clientNode];
     if(si -> pid == -1)
         createShellInst(clientNode, user);
 
+    if(strlen(cmdLengthStr) > 5)
+        errExit("too long command", 0);
+    char cmdl[7] = "AAAAAA";
+    cmdl[6] = 0;
+    strncpy(cmdl, cmdLengthStr, strlen(cmdLengthStr));
+    printf("%s\n", cmdl);
+
     if(si -> pipein == -1)
         si -> pipein = open(si -> fifoName, O_WRONLY);
-    if(write(si->pipein, cmdInput, cmdLength) == -1)
+    if(write(si->pipein, cmdl, 6) == -1)
+        errExit("write (to pipe)", 1);
+    if(write(si->pipein, input, inputLength) == -1)
         errExit("write (to pipe)", 1);
     close(si -> pipein);    
     si -> pipein = -1;

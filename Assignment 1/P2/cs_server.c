@@ -200,11 +200,11 @@ void serviceRequest(int clientNode, Request* requestList, int* csock, char* outp
         return;
     }
     char messageBuffer[SERVREQ_MSG_BUFFLEN];
-    int messageLength = sprintf(messageBuffer, "SREQ %d %s ", clientNode, req -> user);
+    int messageLength = sprintf(messageBuffer, "SREQ %d %s %d ", clientNode, req -> user, j->commandLength+1);
     messageLength += sprintf(messageBuffer + messageLength, "%s\n", j->command);
     if(outputLength > 0) {
         char eot = 0x04;
-        messageLength += sprintf(messageBuffer + messageLength, "%s\n", outputBuffer);
+        messageLength += sprintf(messageBuffer + messageLength, "%s\n%c", outputBuffer, eot);
     }
     int messageLengthBuff = htonl(messageLength);
     send(csock[j->node], &messageLengthBuff, 4, 0);
