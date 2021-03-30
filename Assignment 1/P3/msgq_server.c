@@ -44,6 +44,7 @@ int main(){
    }
  }
   serv = getServer();
+  puts("Server is Active Now");
   while(1){
     handleMsg(serv);
   }

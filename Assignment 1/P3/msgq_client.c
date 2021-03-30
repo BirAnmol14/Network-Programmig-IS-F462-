@@ -20,10 +20,27 @@ void die(char * s){
   perror(s);
   exit(1);
 }
-
+void handle(int signo){
+  if(signo == SIGCHLD){
+    wait(NULL);
+  }
+  if(signo == SIGUSR1){
+    exit(0);
+  }
+}
 int main(){
   serv = getServer();
   cli = getMyQueue();
+  signal(SIGUSR1,handle);
+  signal(SIGCHLD,handle);
+  int pid = fork();
+  if(pid == 0){
+
+      while(1){
+        readMsg();
+      }
+      exit(0);
+  }
   while(1){
         int ret = Options();
         if (ret==-1){
@@ -34,6 +51,7 @@ int main(){
         }
   }
   Logout();
+  kill(pid,SIGUSR1);
   closeMyQueue(cli);
 }
 
@@ -112,7 +130,6 @@ int Options(){
     puts("5. Join a Group");
     puts("6. Send Message to a Group");
     puts("7. Create New Group");
-    puts("8. Read New Messages");
     puts("Enter Option: ");
     scanf("%d",&opt);getchar();
     if(opt == 1){
@@ -135,9 +152,6 @@ int Options(){
     }
     else if(opt==7){
       CreateGrp();
-    }
-    else if(opt==8){
-      readMsg();
     }
     else{
       return 0;
@@ -338,7 +352,7 @@ void JoinGrp(){
         memset(m1.msg,'\0',MSG_MAX);
         memset(m1.from,'\0',USR_NAME_MAX);
         memset(m1.to,'\0',USR_NAME_MAX);
-      
+
     }
 }
 void CreateGrp(){

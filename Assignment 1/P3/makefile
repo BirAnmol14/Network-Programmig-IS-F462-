@@ -9,5 +9,5 @@ compile: cclient cserver
 rclient: compile
 	./client
 
-rserver: server
+rserver: compile
 	./server
