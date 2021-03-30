@@ -10,18 +10,19 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <sys/select.h>
+#include <errno.h>
 #define MAX_NODES 256
 #define INPUT_BUFF_LEN 256
-#define OUTPUT_BUFF_LEN 1024
+#define OUTPUT_BUFF_LEN 4096
 #define REQ_MSG_BUFFLEN 256
-#define SERVRESP_MSG_BUFFLEN 2048
+#define SERVRESP_MSG_BUFFLEN 4096
 
 typedef struct shellInst {
     int pid;
     char user[33];
     int pipein;
     int pipeout;
-    char fifoName[11];
+    char fifoName[20];
 } shellInst;
 
 typedef struct Job {
@@ -29,6 +30,8 @@ typedef struct Job {
     int commandLength;
     char* command;
 } Job;
+
+void closeShellInst(int node, int sendTCLS);
 
 shellInst shellList[MAX_NODES+1];
 int numShells = 0;
@@ -43,6 +46,12 @@ void errExit(char* msg, int printErrNo) {
     else
         fprintf(stderr, "%s\n", msg);
     fprintf(stderr, "Exiting...\n");
+    for(int i = 0; i < MAX_NODES; i++) {
+        if(shellList[i].pid != -1) {
+            closeShellInst(i, 1);
+            wait(NULL);
+        }
+    }
     exit(EXIT_FAILURE);
 }
 
@@ -68,6 +77,17 @@ void sigchldHandle(int signo) {
     }
 }
 
+void sigintHandler(int signo) {
+    fprintf(stderr, "Exiting...\n");
+    for(int i = 0; i < MAX_NODES; i++) {
+        if(shellList[i].pid != -1) {
+            closeShellInst(i, 1);
+            wait(NULL);
+        }
+    }
+    exit(EXIT_SUCCESS);
+}
+
 void initializeClient(void) {
     // create socket
     sock = socket(PF_INET, SOCK_STREAM, 0);
@@ -89,10 +109,11 @@ void initializeClient(void) {
 }
 
 int createShellInst(int clientNode, char user[33]) {
-    char fifoName[11];
-    int nl = sprintf(fifoName, "sh%d.fifo", clientNode);
+    char fifoName[20];
+    int nl = sprintf(fifoName, "s%dn%d.fifo", getpid(), clientNode);
     fifoName[nl] = 0;
-    mkfifo(fifoName, 0777);
+    if(mkfifo(fifoName, 0777) == -1)
+        errExit("mkfifo", 1);
     int pipeOut[2];
     pipe(pipeOut);
     // create shell process
@@ -112,10 +133,9 @@ int createShellInst(int clientNode, char user[33]) {
         // replace stdout with pipeOut[1]
         close(1);
         dup(pipeOut[1]);
-        // execl("shell2", "shell2", (char*) NULL);
         char userpath[40];
         sprintf(userpath, "/home/%s/", user);
-        execl("shell3", "shell3", "--bg", userpath, (char*) NULL);
+        execl("shell", "shell", "--bg", userpath, (char*) NULL);
         errExit("execl", 1);
     } else {
         // parent process - client
@@ -129,6 +149,20 @@ int createShellInst(int clientNode, char user[33]) {
     strcpy(si -> fifoName, fifoName);
     numShells++;
     return 0;
+}
+
+void closeShellInst(int node, int sendTCLS) {
+    if(node < MAX_NODES && shellList[node].pid > 0) {
+        int pid = shellList[node].pid;
+        if(sendTCLS == 0)
+            shellList[node].pid = -1;
+        if(shellList[node].pipein != -1)
+            close(shellList[node].pipein);
+        close(shellList[node].pipeout);
+        unlink(shellList[node].fifoName);
+        memset(shellList[node].fifoName, 0, 20);
+        kill(pid, SIGINT);
+    }
 }
 
 int getNumJobs(char* cmdInput) {
@@ -228,7 +262,10 @@ void executeLocalCommand(char* cmd, int cmdLength) {
     char cmdl[7] = "AAAAAA";
     cmdl[6] = 0;
     strncpy(cmdl, cmdLengthStr, strlen(cmdLengthStr));
-    
+    if(si -> pipein == -1) {
+        si -> pipein = open(si -> fifoName, O_WRONLY);
+        kill(si->pid, SIGUSR1);
+    }
     if(write(si -> pipein, cmdl, 6) == -1)
         errExit("write", 1);
     if(write(si -> pipein, cmd, cmdLength) == -1)
@@ -242,8 +279,6 @@ void sendJobList(Job* jobs, int numJobs) {
         messageLength += sprintf(messageBuffer + messageLength, "%d %d\n%s\n", 
             jobs[i].node, jobs[i].commandLength, jobs[i].command);
     }
-    // messageLength += sprintf(messageBuffer + messageLength, "\n");
-    printf("ML: %d\n", messageLength);
     int messageLengthBuff = htonl(messageLength);
     send(sock, &messageLengthBuff, 4, 0);
     send(sock, messageBuffer, messageLength, 0);
@@ -270,26 +305,30 @@ int writeServerReqToShell(char* message, int messageLength) {
     int inputLength = messageLength - (int)(input - message);
 
     shellInst* si = &shellList[clientNode];
-    if(si -> pid == -1)
+    if(si -> pid == -1)     
         createShellInst(clientNode, user);
-
+    if(si -> pid == -1) {
+        // shell instance rejected/crashed, TCLS will be sent
+        return -1;
+    }
     if(strlen(cmdLengthStr) > 5)
         errExit("too long command", 0);
     char cmdl[7] = "AAAAAA";
     cmdl[6] = 0;
     strncpy(cmdl, cmdLengthStr, strlen(cmdLengthStr));
-    printf("%s\n", cmdl);
+    // printf("%s\n", cmdl);
 
-    if(si -> pipein == -1)
+    if(si -> pipein == -1) {
         si -> pipein = open(si -> fifoName, O_WRONLY);
+        kill(si->pid, SIGUSR1);
+    }
     if(write(si->pipein, cmdl, 6) == -1)
         errExit("write (to pipe)", 1);
     if(write(si->pipein, input, inputLength) == -1)
         errExit("write (to pipe)", 1);
     close(si -> pipein);    
     si -> pipein = -1;
-    // sleep(1);
-    // si -> pipein = open(si -> fifoName, O_WRONLY);
+    return 0;
 }
 
 int writeServerRespOut(char* message, int messageLength) {
@@ -304,9 +343,10 @@ int writeServerRespOut(char* message, int messageLength) {
         printf("[Server]:\n");
     else
         printf("[n%d]:\n", remoteNode);
-    message[messageLength];
+    message[messageLength] = 0;
     char* output = token + strlen(token) + 1;
     printf("%s\n", output);
+    return 0;
 }
 
 int writeOutputToServer(char* outputBuffer, int outputLength, int clientNode) {
@@ -344,15 +384,19 @@ int main(void) {
             }
         }
         int sr = select(maxfd + 1, &readSet, NULL, NULL, NULL);
-        if(sr == -1)
-            errExit("select", 1);
+        if(sr == -1) {
+            if(errno == EINTR)
+                continue;
+            else
+                errExit("select", 1);
+        }
         if(sr > 0 && FD_ISSET(STDIN_FILENO, &readSet)) {
             // stdin readable
             fgets(cmdInput, INPUT_BUFF_LEN, stdin);
             if(strcmp(cmdInput, "\n") == 0)
                 continue;
             int numJobs = parseInput(cmdInput, &jobs);
-            printJobList(jobs, numJobs);
+            // printJobList(jobs, numJobs);
             if(isJobListLocal(jobs, numJobs)) {
                 // execute local job
                 executeLocalCommand(cmdInput, strlen(cmdInput));
@@ -374,18 +418,18 @@ int main(void) {
                 errExit("Server: Connection terminated", 0);
             }
             messageLength = ntohl(messageLength);
-            printf("ML: %d\n", messageLength);
+            // printf("ML: %d\n", messageLength);
             char message[messageLength+1];
             if(recv(sock, message, messageLength, 0) != messageLength)
                 errExit("read: insuf bytes", 0);
             message[messageLength] = 0;
             if(strncmp(message, "SREQ", 4) == 0) {
                 // new request from server
-                printf("Received new request from server\n");
+                // printf("Received new request from server\n");
                 writeServerReqToShell(message, messageLength);
             } else if(strncmp(message, "RESP", 4) == 0){
                 // response from server
-                printf("received final response\n");
+                // printf("received final response\n");
                 writeServerRespOut(message, messageLength);
                 stdinlock = 0;
                 printf("$ ");
@@ -398,19 +442,13 @@ int main(void) {
                 token = strtok(NULL, " ");
                 if(!token) continue;
                 int node = atoi(token);
-                if(node < MAX_NODES && shellList[node].pid > 0) {
-                    int pid = shellList[node].pid;
-                    shellList[node].pid = -1;
-                    close(shellList[node].pipein);
-                    close(shellList[node].pipeout);
-                    kill(pid, SIGINT);
-                }
+                closeShellInst(node, 0);
             } else {
-                printf("UNKNOWN MSG\n");
+                // printf("UNKNOWN MSG\n");
                 char code[5];
                 strncpy(code, message, 4);
                 code[4] = 0;
-                printf("%s\n", code);
+                // printf("%s\n", code);
             }
             sr--;
         }

@@ -95,37 +95,29 @@ void terminal(){
   sigaction(SIGCHLD,&s_act,NULL);
   shortCmds * sc = newShortCmds();
   while(1){
-    char * op = malloc(128*sizeof(char));
-    memset(op,'\0',128);
-    sprintf(op,"/proc/%d/stat",terminalPID);
-    int proc = open(op,O_RDONLY);
-    int spc=2;
-    int jr;
-    char x;
-    // while((jr=read(proc,&x,1))){
-    //   if(jr == -1) {
-
-    //   }
-    //   if(jr == 0)
-    //     break;
-    //   if(spc ==0){
-    //     break;
-    //   }
-    //   if(x==' '){
-    //     spc --;
-    //   }
-    // }
-    // if(jr<0){
-    //   if(jr < 0)
-    //     die("Process stat read error (terminal)");
-    // } 
     if(!BGshell) {
+      char * op = malloc(128*sizeof(char));
+      memset(op,'\0',128);
+      sprintf(op,"/proc/%d/stat",terminalPID);
+      int proc = open(op,O_RDONLY);
+      int spc=2;
+      int jr;
+      char x;
+      while((jr=read(proc,&x,1))){
+        if(spc ==0){
+          break;
+        }
+        if(x==' '){
+          spc --;
+        }
+      }
+      if(jr<0)
+        die("Process stat read error (terminal)");
       memset(op,'\0',128);
       sprintf(op,"#####################\nTerminal pid: %d(group: %d)\tStatus: %c\n",getpid(),getpgid(0),x);
       write(fileno(stdout),op,strlen(op));
-    }
-    free(op);
-    if(!BGshell) {
+      free(op);
+
       char * usr = getenv("USER");
       write(fileno(stdout),usr,strlen(usr));
       write(fileno(stdout),"@",1);
@@ -147,18 +139,18 @@ void terminal(){
     while(1) {
       n = read(fileno(stdin), cmdl, 6);
       if(n == 0) {
-        sleep(1);
+        pause();
         continue;
       }
       if(n < 0)
         break;
-      fprintf(stderr, "READ1: %s\n", readBuf);
+      // fprintf(stderr, "READ1: %s\n", readBuf);
       cmdl[6] = 0;
-      fprintf(stderr, "%s\n", cmdl);
+      // fprintf(stderr, "%s\n", cmdl);
       cmdLength = strtol(cmdl, NULL, 10);
-      fprintf(stderr, "commandLength: %d\n", cmdLength);
+      // fprintf(stderr, "commandLength: %d\n", cmdLength);
       n = read(fileno(stdin),readBuf,cmdLength);
-      fprintf(stderr, "READ2: %s\n", readBuf);
+      // fprintf(stderr, "READ2: %s\n", readBuf);
       if(n > 0)
         break;
     }

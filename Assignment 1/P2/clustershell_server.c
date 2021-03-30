@@ -8,9 +8,9 @@
 #include <sys/select.h>
 #define MAX_NODES 256
 #define LISTEN_QSIZE 10
-#define SERVREQ_MSG_BUFFLEN 512
-#define SERVRESP_MSG_BUFFLEN 2048
-#define RESP_MSG_BUFFLEN 2048
+#define SERVREQ_MSG_BUFFLEN 4096
+#define SERVRESP_MSG_BUFFLEN 4096
+#define RESP_MSG_BUFFLEN 4096
 
 typedef struct Job {
     int node;   
@@ -51,7 +51,7 @@ void initializeServer(char* configFilePath) {
     num_nodes = 0;
     while(fgets(ipaddr, 16, configFile) != NULL) {
         ipaddr[strcspn(ipaddr, "\n")] = 0;
-        printf("%s\n", ipaddr);
+        // printf("%s\n", ipaddr);
         if(i > MAX_NODES) {
             fprintf(stderr, "ERROR: Maximum nodes supported: %d\n", MAX_NODES);
             exit(EXIT_FAILURE);
@@ -78,9 +78,9 @@ void initializeServer(char* configFilePath) {
     return;
 }
 
-int matchAddrWithNode(struct sockaddr_in* clientAddr) {
+int matchAddrWithNode(struct sockaddr_in* clientAddr, int* csock) {
     for(int i = 1; i <= num_nodes; i++) {
-        if(ip_map[i] == clientAddr->sin_addr.s_addr)
+        if(csock[i] == -1 && ip_map[i] == clientAddr->sin_addr.s_addr)
             return i;
     }
     return -1;
@@ -105,15 +105,14 @@ int registerRequest(char* message, int messageLength, int node, Request* request
     for(int i = 0; i < req.numJobs; i++) {
         token = strtok(NULL, delim);
         if(!token) return -1;
-        printf("a");
         req.jobs[i].node = atoi(token);
+        if(req.jobs[i].node < -1 || req.jobs[i].node > num_nodes)
+            return -1;
         token = strtok(NULL, delim);
         if(!token) return -1;
-        printf("a");
         req.jobs[i].commandLength = atoi(token);
         token = strtok(NULL, "\n");
         if(!token) return -1;
-        printf("a");
         req.jobs[i].command = malloc(req.jobs[i].commandLength + 1);
         strncpy(req.jobs[i].command, token, req.jobs[i].commandLength);
         req.jobs[i].command[req.jobs[i].commandLength] = 0;
@@ -129,7 +128,8 @@ int registerRequest(char* message, int messageLength, int node, Request* request
         req.numJobs = num_nodes;
         int commandLength = req.jobs[0].commandLength;
         char* command = req.jobs[0].command;
-        free(req.jobs);
+        if(req.jobs != NULL)
+            free(req.jobs);
         req.jobs = malloc(sizeof(Job) * num_nodes);
         for(int i = 1; i <= num_nodes; i++) {
             req.jobs[i-1].node = i;
@@ -209,10 +209,12 @@ void serviceRequest(int clientNode, Request* requestList, int* csock, char* outp
     int messageLengthBuff = htonl(messageLength);
     send(csock[j->node], &messageLengthBuff, 4, 0);
     send(csock[j->node], messageBuffer, messageLength, 0);
-    printf("Sent request to remote client for service (job %d)\n", req->state);
+    // printf("Sent request to remote client for service (job %d)\n", req->state);
 }
 
 void closeRequest(Request* req) {
+    if(req -> state == -2)
+        return;
     req -> state = -2;
     if(req -> isBroadcast) {
         free((req -> jobs)[0].command);
@@ -223,6 +225,7 @@ void closeRequest(Request* req) {
     }
     req -> numJobs = 0;
     free(req -> jobs);
+    req -> jobs = NULL;
     return;
 }
 
@@ -277,15 +280,14 @@ int main(int argc, char* argv[]) {
         if(sr == -1)
             errExit("select", 1);
         if(sr > 0 && FD_ISSET(lsock, &readSet)) {
-            printf("New connection request.\n");
-            fflush(stdout);
+            // printf("New connection request.\n");
             // new connection
             struct sockaddr_in clientAddr;
             int clientAddrLength = sizeof(clientAddr);
             int connfd = accept(lsock, (struct sockaddr*) &clientAddr, &clientAddrLength);
             if(connfd == -1)
                 errExit("accept", 1);
-            int node = matchAddrWithNode(&clientAddr);
+            int node = matchAddrWithNode(&clientAddr, csock);
             if(node == -1) {
                 // unknown node
                 close(connfd);
@@ -321,21 +323,27 @@ int main(int argc, char* argv[]) {
                     continue;
                 }
                 messageLength = ntohl(messageLength);
-                printf("ML: %d\n", messageLength);
+                // printf("ML: %d\n", messageLength);
                 char message[messageLength];
                 if(recv(csock[i], message, messageLength, 0) != messageLength)
                     errExit("read: insuf bytes", 0);
                 if(strncmp(message, "REQ", 3) == 0) {
-                    printf("A REQUEST!\n");
+                    // printf("A REQUEST!\n");
                     // new request
                     if(registerRequest(message, messageLength, i, requestList) == -1) {
                         // reject request
-                        printf("Rejected\n");
+                        // printf("Rejected\n");
+                        char messageBuffer[RESP_MSG_BUFFLEN];
+                        int messageLength = sprintf(messageBuffer, "RESP 0 Invalid Request");
+                        int messageLengthBuff = htonl(messageLength);
+                        send(csock[i], &messageLengthBuff, 4, 0);
+                        send(csock[i], messageBuffer, messageLength, 0);
+                    } else {
+                        serviceRequest(i, requestList, csock, NULL, 0);
                     }
-                    serviceRequest(i, requestList, csock, NULL, 0);
                 } else if(strncmp(message, "SRSP", 4) == 0){
                     // response to job
-                    printf("received response from client\n");
+                    // printf("received response from client\n");
                     int clientNode;
                     int outputLength;
                     char* outputBuffer = receiveJobResponse(message, messageLength, &outputLength, &clientNode);
