@@ -16,21 +16,23 @@
 #include <sys/wait.h>
 #define BUFSIZE 1500
 #define PERHOSTLIM 3
-
+int lookup_host (const char *host);
 typedef struct myRTT4{
   char addr[40];//IP addr
   int ipv;//IP version
-  double rtt[PERHOSTLIM];
+  float rtt[PERHOSTLIM];
   int sockfd;
   struct sockaddr_in dest;
+  int rcv_cnt;
 } myRTT4;
 
 typedef struct myRTT6{
   char addr[40];//IP addr
   int ipv;//IP version
-  double rtt[PERHOSTLIM];
+  float rtt[PERHOSTLIM];
   int sockfd;
   struct sockaddr_in6 dest;
+  int rcv_cnt;
 } myRTT6;
 
 void setV4Dest(myRTT4 *);
@@ -46,7 +48,8 @@ void recv_packetV4(myRTT4 * r);
 int procV4(myRTT4 *,char *, int ,struct timeval *);
 void recv_packetV6(myRTT6 * r);
 int procV6(myRTT6 *,char *, int ,struct timeval *);
-
+void printStatsV4(myRTT4 *);
+void printStatsV6(myRTT6 *);
 void die(const char * msg,int type){
   if(type==0){
     perror(msg);
@@ -90,6 +93,7 @@ int main(int argc, char *argv[])
               memset(r.addr,'\0',40);
               strcpy(r.addr,addr);
               r.ipv = type;
+              r.rcv_cnt = 0;
               r.sockfd = getSocket(type);
               setV4Dest(&r);
               for(int i=0;i<PERHOSTLIM;i++){
@@ -98,13 +102,11 @@ int main(int argc, char *argv[])
               for(int i=0;i<PERHOSTLIM;i++){
                   //send and recv
                   send_packetV4(i,&r);
-                  recv_packetV4(&r);
+                  while(r.rcv_cnt!=i+1){
+                      recv_packetV4(&r);
+                  }
               }
-              printf("HOST: %s\t",r.addr);
-              for(int i=0;i<PERHOSTLIM;i++){
-                  printf("RTT(%d) = %.3f ms ",i+1 ,r.rtt[i]);
-              }
-              puts("");
+              printStatsV4(&r);
               close(r.sockfd);
           }else if(type ==6){
               totalv6++;
@@ -112,6 +114,7 @@ int main(int argc, char *argv[])
               memset(r.addr,'\0',40);
               strcpy(r.addr,addr);
               r.ipv = type;
+              r.rcv_cnt=0;
               r.sockfd = getSocket(type);
               setV6Dest(&r);
               for(int i=0;i<PERHOSTLIM;i++){
@@ -119,8 +122,11 @@ int main(int argc, char *argv[])
               }
               for(int i=0;i<PERHOSTLIM;i++){
                   send_packetV6(i,&r);
-                  recv_packetV6(&r);
+                  while(r.rcv_cnt!=i+1){
+                    recv_packetV6(&r);
+                  }
               }
+              printStatsV6(&r);
               close(r.sockfd);
           }
    }
@@ -164,20 +170,22 @@ int getNextIP(FILE * fp,char * msg,int * status){
 void setV4Dest(myRTT4 * r){
       (r->dest).sin_family = AF_INET;
       (r->dest).sin_addr.s_addr = inet_addr(r->addr);
-      printf("PING FOR %s\n",inet_ntoa((r->dest).sin_addr));
+      (r->dest).sin_port = htons(0);
+      //printf("PING FOR %s\n",inet_ntoa((r->dest).sin_addr));
 }
 void setV6Dest(myRTT6 * r){
-    (r->dest).sin6_family = AF_INET6;
-    inet_pton(AF_INET6,r->addr,(r->dest).sin6_addr.s6_addr);
-    printf("PING FOR %s\n",r->addr);
-    if(IN6_IS_ADDR_V4MAPPED(&((r->dest).sin6_addr))){
-      printf("Can't PING IPv4 mapped IPv6 address\n");
-    }
+      (r->dest).sin6_family = AF_INET6;
+      inet_pton(AF_INET6,r->addr,&((r->dest).sin6_addr));
+      (r->dest).sin6_port = htons(0);
+      //char addrstr[100];
+      //inet_ntop (AF_INET6,&(r->dest).sin6_addr , addrstr, 100);
+      //printf("PING FOR IPv6 address: %s\n",addrstr);
+      return;
 }
 int getSocket(int ipv){
   if(ipv == 4){
     //IPv4
-    int sock = socket(AF_INET,SOCK_RAW,IPPROTO_ICMP);
+    int sock = socket(PF_INET,SOCK_RAW,IPPROTO_ICMP);
     if(sock <0 ){
       die("Socket failed",0);
     }
@@ -189,17 +197,20 @@ int getSocket(int ipv){
     return sock;
   }else if(ipv == 6){
     //IPv6
-    int sock = socket(AF_INET6,SOCK_RAW,IPPROTO_ICMPV6);
+    int sock = socket(PF_INET6,SOCK_RAW,IPPROTO_ICMPV6);
+    int hoplimit = 50;
+    setsockopt(sock, IPPROTO_IPV6, IPV6_UNICAST_HOPS, &hoplimit,sizeof(hoplimit));
     if(sock <0 ){
       die("Socket failed",0);
     }
     struct icmp6_filter filt;
     ICMP6_FILTER_SETBLOCKALL(&filt);
     ICMP6_FILTER_SETPASS(ICMP6_ECHO_REPLY,&filt);
-    ICMP6_FILTER_SETPASS(ICMP6_ECHO_REQUEST,&filt);
     setsockopt(sock,IPPROTO_IPV6,ICMP6_FILTER,&filt,sizeof(filt));
     int size = 60*1024;
     setsockopt(sock,SOL_SOCKET,SO_RCVBUF,&size,sizeof(size));
+    int on=1;
+    setsockopt(sock,SOL_SOCKET,IPV6_V6ONLY,&on,sizeof(on));
     struct timeval tv ={.tv_sec=1};
     setsockopt(sock,SOL_SOCKET,SO_RCVTIMEO,&tv,sizeof(tv));
     setsockopt(sock,SOL_SOCKET,SO_SNDTIMEO,&tv,sizeof(tv));
@@ -234,7 +245,7 @@ void send_packetV4(int seq,myRTT4 * r)
 {
   int sockfd = r->sockfd;
    int i, packsize;
-   char sendpacket [BUFSIZE];
+   char sendpacket [BUFSIZE]={0};
    struct icmp *icmp;
    struct timeval *tval;
    icmp = (struct icmp*)sendpacket;
@@ -251,7 +262,7 @@ void send_packetV4(int seq,myRTT4 * r)
    if (sendto(sockfd,sendpacket, packsize, 0,(struct sockaddr *)&(r->dest), sizeof((r->dest))) < 0)
    {
        if(errno==EWOULDBLOCK){
-           die("timeout",1);
+           //die("timeout",1);
            return;
        }
         die("sendto error",1);
@@ -262,20 +273,22 @@ void recv_packetV4(myRTT4 * r)
     struct sockaddr_in cli;
     char recvpacket [BUFSIZE];
     int n, clilen;
+    float rtt;
     clilen = sizeof(cli);
     if ((n = recvfrom(r->sockfd, recvpacket, sizeof(recvpacket), 0, (struct sockaddr*) &cli, &clilen)) < 0)
         {
             if(errno==EWOULDBLOCK){
-                die("timeout",1);
+                //die("timeout",1);
+                r->rcv_cnt++;
                 return;
             }
            die("recvfrom error",1);
            return;
-        }
+         }
     struct timeval tvrecv;
     gettimeofday(&tvrecv, NULL);
     if (procV4(r,recvpacket, n,&tvrecv) < 0){
-        die("Failed to process packet",1);
+        //die("Failed to process packet",1);
     }
 }
 int procV4(myRTT4 * r,char *recvbuf, int len,struct timeval * tvrecv)
@@ -297,6 +310,7 @@ int procV4(myRTT4 * r,char *recvbuf, int len,struct timeval * tvrecv)
         printf("ICMP packets\'s length is less than 8\n");
         return  -1;
     }
+
     if ((icmp->icmp_type == ICMP_ECHOREPLY) && (icmp->icmp_id == getpid()))
     {
         if(icmplen < 16){
@@ -305,8 +319,9 @@ int procV4(myRTT4 * r,char *recvbuf, int len,struct timeval * tvrecv)
         }
         tvsend = (struct timeval*)icmp->icmp_data;
         tv_sub(tvrecv, tvsend);
-        rtt = tvrecv->tv_sec * 1000+tvrecv->tv_usec / 1000;
+        rtt = tvrecv->tv_sec * 1000.0+(tvrecv->tv_usec / 1000.0);
         r->rtt[icmp->icmp_seq] = rtt;
+        r->rcv_cnt++;
         return 1;
     }
     else
@@ -341,7 +356,7 @@ void send_packetV6(int seq,myRTT6 * r)
    if (sendto(sockfd,sendpacket, packsize, 0,(struct sockaddr *)&(r->dest), sizeof((r->dest))) < 0)
    {
        if(errno==EWOULDBLOCK){
-           die("timeout",1);
+           //die("timeout",1);
            return;
        }
         perror("sendto error");
@@ -356,7 +371,8 @@ void recv_packetV6(myRTT6 * r)
     if ((n = recvfrom(r->sockfd,recvpacket,sizeof(recvpacket),0,(struct sockaddr*)&cli,&clilen)) < 0)
         {
             if(errno==EWOULDBLOCK){
-                die("timeout",1);
+                //die("timeout",1);
+                r->rcv_cnt++;
                 return;
             }
             perror("recvfrom error");
@@ -365,7 +381,7 @@ void recv_packetV6(myRTT6 * r)
     struct timeval tvrecv;
     gettimeofday(&tvrecv, NULL);
     if (procV6(r,recvpacket, n,&tvrecv) < 0){
-        die("Failed to process packet",1);
+        //die("Failed to process packet",1);
     }
 }
 int procV6(myRTT6 * r,char *recvbuf, int len,struct timeval * tvrecv)
@@ -378,17 +394,41 @@ int procV6(myRTT6 * r,char *recvbuf, int len,struct timeval * tvrecv)
       printf("ICMP packets\'s length is less than 8\n");
       return  -1;
     }
-    if(icmp6->icmp6_type == ICMP6_ECHO_REPLY && icmp6->icmp6_id == getpid()){
+    if((icmp6->icmp6_type == ICMP6_ECHO_REPLY) && icmp6->icmp6_id == getpid()){
       if(len < 16){
         printf("ICMP packets\'s length is less than 16, Not enough to be processed\n");
         return -1;
       }
       tvsend = (struct timeval*)(icmp6+1);
       tv_sub(tvrecv, tvsend);
-      rtt = tvrecv->tv_sec * 1000+tvrecv->tv_usec / 1000;
+      rtt = tvrecv->tv_sec * 1000.0+ (tvrecv->tv_usec / 1000.0);
       r->rtt[icmp6->icmp6_seq] = rtt;
+      r->rcv_cnt++;
       return 1;
     }else{
       return -1;
     }
+}
+
+void printStatsV4(myRTT4 * r){
+  printf("HOST: %-40s\t",r->addr);
+  for(int i=0;i<PERHOSTLIM;i++){
+    if(r->rtt[i]==-1){
+    printf("RTT(%d) = **** ms\t",i+1 );
+    }else{
+    printf("RTT(%d) = %.3f ms\t",i+1 ,r->rtt[i]);
+    }
+  }
+  puts("\n");
+}
+void printStatsV6(myRTT6 * r){
+  printf("HOST: %-40s\t",r->addr);
+  for(int i=0;i<PERHOSTLIM;i++){
+    if(r->rtt[i]==-1){
+    printf("RTT(%d) = **** ms\t",i+1 );
+    }else{
+    printf("RTT(%d) = %.3f ms\t",i+1 ,r->rtt[i]);
+    }
+  }
+  puts("\n");
 }
