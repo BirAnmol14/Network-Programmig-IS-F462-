@@ -72,7 +72,8 @@ int main(int argc, char *argv[])
         die("The input file does not exist",0);
     }
     puts("***** rtt program started *****");
-    time_t start = time(NULL);
+    struct timeval start;
+	gettimeofday(&start,NULL);
     int done = 0;
     while(!done){
         while(1){
@@ -108,17 +109,17 @@ int main(int argc, char *argv[])
         pthread_mutex_unlock(&count);
     }
 
-   time_t end=time(NULL);
    fclose(fp);
    puts("***** rtt program ended *****");
+   struct timeval end;
+   gettimeofday(&end,NULL);
+   tv_sub(&end,&start);
    printf("Total %d (IPv4: %d + Ipv6: %d) IP addresses PINGED\n",totalv4+totalv6,totalv4,totalv6);
-   time_t gap =end-start;
-   int hrs = (gap/3600);
-   gap%=3600;
+   int gap =end.tv_sec;
    int mins = gap/60;
    gap%=60;
    int sec = gap;
-   printf("Total time taken: %d hrs:%d mins: %d secs\n",hrs,mins,sec);
+   printf("Total time taken=> %d mins: %d secs: %ld ms\n",mins,sec,(end.tv_usec)/1000);
    return 0;
 }
 void * manage(void * args){
