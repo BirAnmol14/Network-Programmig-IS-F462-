@@ -14,42 +14,40 @@
 #include <netinet/ip.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <sys/epoll.h>
+#include <pthread.h>
+
 #define BUFSIZE 1500
 #define PERHOSTLIM 3
-int lookup_host (const char *host);
-typedef struct myRTT4{
+#define TIMEOUT 3000
+
+#define max(a,b)(a>b?a:b)
+int MAXTHREAD = max((300/PERHOSTLIM),1);
+
+typedef struct myRTT{
   char addr[40];//IP addr
   int ipv;//IP version
-  float rtt[PERHOSTLIM];
+  float rtt;
   int sockfd;
-  struct sockaddr_in dest;
+  int seq;
   int rcv_cnt;
-} myRTT4;
+}myRTT;
 
-typedef struct myRTT6{
-  char addr[40];//IP addr
-  int ipv;//IP version
-  float rtt[PERHOSTLIM];
-  int sockfd;
-  struct sockaddr_in6 dest;
-  int rcv_cnt;
-} myRTT6;
-
-void setV4Dest(myRTT4 *);
-void setV6Dest(myRTT6 *);
+pthread_mutex_t count = PTHREAD_MUTEX_INITIALIZER;
+void * manage(void *);
 int getIPVersion(const char *);
-int getNextIP(FILE *,char * ,int *);
+int getNextIP(FILE *,char * );
 int getSocket(int);
 unsigned short cal_chksum(unsigned short *, int);
 void tv_sub(struct timeval *out, struct timeval *in);
-void send_packetV4(int seq,myRTT4*);
-void send_packetV6(int seq,myRTT6*);
-void recv_packetV4(myRTT4 * r);
-int procV4(myRTT4 *,char *, int ,struct timeval *);
-void recv_packetV6(myRTT6 * r);
-int procV6(myRTT6 *,char *, int ,struct timeval *);
-void printStatsV4(myRTT4 *);
-void printStatsV6(myRTT6 *);
+int  send_packetV4(int seq,myRTT*);
+int  send_packetV6(int seq,myRTT*);
+void recv_packetV4(myRTT * r);
+int procV4(myRTT *,char *, int ,struct timeval *);
+void recv_packetV6(myRTT * r);
+int procV6(myRTT *,char *, int ,struct timeval *);
+void printStats(myRTT *,char *);
+
 void die(const char * msg,int type){
   if(type==0){
     perror(msg);
@@ -58,12 +56,13 @@ void die(const char * msg,int type){
     puts(msg);
   }
 }
+
+int totalThreads = 0;
+int totalv4 = 0;
+int totalv6 = 0;
 int datalen = 56;
 int main(int argc, char *argv[])
 {
-    int totalPinged = 0;
-    int totalv4 = 0;
-    int totalv6 = 0;
     if(argc<2||argc>2){
       puts("Invalid usage: ./a.out <IP filename name>");
       exit(1);
@@ -76,64 +75,43 @@ int main(int argc, char *argv[])
     time_t start = time(NULL);
     int done = 0;
     while(!done){
-          char addr[128];
-          memset(addr,'\0',128);
-          int ret = getNextIP(fp,addr,&done);
-          if(!ret){
-            continue;
-          }
-          int type = getIPVersion(addr);
-          if(type<0){
-            continue;
-          }
-          totalPinged++;
-          if(type == 4){
-              totalv4++;
-              myRTT4 r;
-              memset(r.addr,'\0',40);
-              strcpy(r.addr,addr);
-              r.ipv = type;
-              r.rcv_cnt = 0;
-              r.sockfd = getSocket(type);
-              setV4Dest(&r);
-              for(int i=0;i<PERHOSTLIM;i++){
-                  r.rtt[i]=-1;
+        while(1){
+            pthread_mutex_lock(&count);
+              if(totalThreads>=MAXTHREAD){
+                pthread_mutex_unlock(&count);
+                continue;
               }
-              for(int i=0;i<PERHOSTLIM;i++){
-                  //send and recv
-                  send_packetV4(i,&r);
-                  while(r.rcv_cnt!=i+1){
-                      recv_packetV4(&r);
-                  }
-              }
-              printStatsV4(&r);
-              close(r.sockfd);
-          }else if(type ==6){
-              totalv6++;
-              myRTT6 r;
-              memset(r.addr,'\0',40);
-              strcpy(r.addr,addr);
-              r.ipv = type;
-              r.rcv_cnt=0;
-              r.sockfd = getSocket(type);
-              setV6Dest(&r);
-              for(int i=0;i<PERHOSTLIM;i++){
-                  r.rtt[i]=-1;
-              }
-              for(int i=0;i<PERHOSTLIM;i++){
-                  send_packetV6(i,&r);
-                  while(r.rcv_cnt!=i+1){
-                    recv_packetV6(&r);
-                  }
-              }
-              printStatsV6(&r);
-              close(r.sockfd);
-          }
-   }
+              break;
+        }
+        pthread_mutex_unlock(&count);
+        char * addr= malloc(128*sizeof(char));
+        memset(addr,'\0',128);
+        int ret = getNextIP(fp,addr);
+        if(!ret){
+          done = 1;
+          continue;
+        }
+        pthread_t t;
+        int retr =pthread_create(&t,NULL,manage,addr);
+        if(retr== 0){
+          pthread_mutex_lock(&count);
+          totalThreads++;
+          pthread_mutex_unlock(&count);
+        }
+    }
+    while(1){
+        pthread_mutex_lock(&count);
+        if(totalThreads==0){
+          pthread_mutex_unlock(&count);
+          break;
+        }
+        pthread_mutex_unlock(&count);
+    }
+
    time_t end=time(NULL);
    fclose(fp);
    puts("***** rtt program ended *****");
-   printf("Total %d (IPv4: %d + Ipv6: %d) IP addresses PINGED\n",totalPinged,totalv4,totalv6);
+   printf("Total %d (IPv4: %d + Ipv6: %d) IP addresses PINGED\n",totalv4+totalv6,totalv4,totalv6);
    time_t gap =end-start;
    int hrs = (gap/3600);
    gap%=3600;
@@ -142,6 +120,122 @@ int main(int argc, char *argv[])
    int sec = gap;
    printf("Total time taken: %d hrs:%d mins: %d secs\n",hrs,mins,sec);
    return 0;
+}
+void * manage(void * args){
+      char * addr = (char *)args;
+      pthread_detach(pthread_self());
+      if(addr==NULL || strlen(addr)<=0){
+        pthread_mutex_lock(&count);
+        free(addr);
+        totalThreads--;
+        pthread_mutex_unlock(&count);
+        pthread_exit(0);
+      }
+
+      int total = 0;
+      int epfd;
+      struct epoll_event ev;
+      struct epoll_event evlist[PERHOSTLIM];
+      pthread_mutex_lock(&count);
+      epfd = epoll_create(3);
+      if(epfd == -1){
+        die("epoll error",0);
+      }
+      pthread_mutex_unlock(&count);
+      int type = getIPVersion(addr);
+      if(type<=0){
+        pthread_mutex_lock(&count);
+        totalThreads--;
+        close(epfd);
+        free(addr);
+        pthread_mutex_unlock(&count);
+        pthread_exit(0);
+      }
+      myRTT r[PERHOSTLIM];
+      pthread_mutex_lock(&count);
+      if(type==4)
+        totalv4++;
+      else
+        totalv6++;
+      pthread_mutex_unlock(&count);
+      for(int i=0;i<PERHOSTLIM;i++){
+            memset(r[i].addr,'\0',40);
+            strcpy(r[i].addr,addr);
+            r[i].ipv = type;
+            pthread_mutex_lock(&count);
+            r[i].sockfd= getSocket(type);
+            pthread_mutex_unlock(&count);
+            r[i].rcv_cnt = 0;
+            r[i].rtt = -1;
+            r[i].seq = i;
+            ev.events = EPOLLOUT;
+            ev.data.ptr = &r[i];
+            if (epoll_ctl (epfd, EPOLL_CTL_ADD, r[i].sockfd, &ev) == -1){die("epoll_ctl error",0);}
+      }
+      while(total!=PERHOSTLIM){
+
+            int ready = epoll_wait (epfd, evlist, PERHOSTLIM, TIMEOUT);
+
+            if (ready == -1)
+            {
+              if (errno == EINTR)
+                continue;
+              else
+                die("epoll_wait",1);
+                break;
+            }
+            if(ready == 0){
+              //timeout
+              break;
+            }
+            for(int i=0;i<ready;i++){
+                if(evlist[i].events & EPOLLOUT){
+                    myRTT * r = (myRTT *)evlist[i].data.ptr;
+                    //Send Packets
+                    int ret;
+                    if(r->ipv==4){
+                        ret=send_packetV4(r->seq,r);
+                    }else{
+                      ret=send_packetV6(r->seq,r);
+                    }
+                    if(ret == 1){
+                      ev.events = EPOLLIN;
+                      ev.data.ptr = r;
+                      if (epoll_ctl (epfd, EPOLL_CTL_MOD, r->sockfd, &ev) == -1){die("epoll_ctl error",1);}
+                    }
+                    else{
+                      ev.events = EPOLLOUT;
+                      ev.data.ptr = r;
+                      if (epoll_ctl (epfd, EPOLL_CTL_DEL, r->sockfd, &ev) == -1){die("epoll_ctl error",1);}
+                      close(r->sockfd);
+                      total++;
+                    }
+                }
+                else if(evlist[i].events & EPOLLIN){
+                    myRTT * r = (myRTT *)evlist[i].data.ptr;
+                    //Send Packets
+                    if(r->ipv==4){
+                        recv_packetV4(r);
+                    }else{
+                      recv_packetV6(r);
+                    }
+                    if(r->rcv_cnt>=1){
+                      ev.events = EPOLLIN;
+                      ev.data.ptr = r;
+                      if (epoll_ctl (epfd, EPOLL_CTL_DEL, r->sockfd, &ev) == -1){die("epoll_ctl error",1);}
+                      close(r->sockfd);
+                      total++;
+                    }
+                }
+            }
+      }
+      pthread_mutex_lock(&count);
+      printStats(r,addr);
+      totalThreads--;
+      close(epfd);
+      free(addr);
+      pthread_mutex_unlock(&count);
+      pthread_exit(0);
 }
 
 int getIPVersion(const char *addr) {
@@ -153,34 +247,16 @@ int getIPVersion(const char *addr) {
     }
     return -1;
 }
-int getNextIP(FILE * fp,char * msg,int * status){
+int getNextIP(FILE * fp,char * msg){
   if(feof(fp)){
-    *status = 1;
     return 0;
   }
   fscanf(fp,"%[^\n]",msg);
   fgetc(fp);
   if(strlen(msg)==0||feof(fp)){
-    *status = 1;
     return 0;
   }
-  *status = 0;
   return 1;
-}
-void setV4Dest(myRTT4 * r){
-      (r->dest).sin_family = AF_INET;
-      (r->dest).sin_addr.s_addr = inet_addr(r->addr);
-      (r->dest).sin_port = htons(0);
-      //printf("PING FOR %s\n",inet_ntoa((r->dest).sin_addr));
-}
-void setV6Dest(myRTT6 * r){
-      (r->dest).sin6_family = AF_INET6;
-      inet_pton(AF_INET6,r->addr,&((r->dest).sin6_addr));
-      (r->dest).sin6_port = htons(0);
-      //char addrstr[100];
-      //inet_ntop (AF_INET6,&(r->dest).sin6_addr , addrstr, 100);
-      //printf("PING FOR IPv6 address: %s\n",addrstr);
-      return;
 }
 int getSocket(int ipv){
   if(ipv == 4){
@@ -241,9 +317,13 @@ unsigned short cal_chksum(unsigned short *addr, int len)
     return answer;
 }
 
-void send_packetV4(int seq,myRTT4 * r)
+int send_packetV4(int seq,myRTT * r)
 {
-  int sockfd = r->sockfd;
+    struct sockaddr_in other;
+    other.sin_family = AF_INET;
+    other.sin_addr.s_addr = inet_addr(r->addr);
+    other.sin_port = htons(0);
+   int sockfd = r->sockfd;
    int i, packsize;
    char sendpacket [BUFSIZE]={0};
    struct icmp *icmp;
@@ -259,16 +339,18 @@ void send_packetV4(int seq,myRTT4 * r)
    tval = (struct timeval*)icmp->icmp_data;
    gettimeofday(tval, NULL);
    icmp->icmp_cksum = cal_chksum((unsigned short*)icmp, packsize);
-   if (sendto(sockfd,sendpacket, packsize, 0,(struct sockaddr *)&(r->dest), sizeof((r->dest))) < 0)
+   if (sendto(sockfd,sendpacket, packsize, 0,(struct sockaddr *)&other, sizeof(other)) < 0)
    {
        if(errno==EWOULDBLOCK){
-           //die("timeout",1);
-           return;
+           die("timeout",1);
+           return -1;
        }
         die("sendto error",1);
+        return -1;
    }
+   return 1;
 }
-void recv_packetV4(myRTT4 * r)
+void recv_packetV4(myRTT * r)
 {
     struct sockaddr_in cli;
     char recvpacket [BUFSIZE];
@@ -278,7 +360,7 @@ void recv_packetV4(myRTT4 * r)
     if ((n = recvfrom(r->sockfd, recvpacket, sizeof(recvpacket), 0, (struct sockaddr*) &cli, &clilen)) < 0)
         {
             if(errno==EWOULDBLOCK){
-                //die("timeout",1);
+                die("timeout",1);
                 r->rcv_cnt++;
                 return;
             }
@@ -291,7 +373,7 @@ void recv_packetV4(myRTT4 * r)
         //die("Failed to process packet",1);
     }
 }
-int procV4(myRTT4 * r,char *recvbuf, int len,struct timeval * tvrecv)
+int procV4(myRTT * r,char *recvbuf, int len,struct timeval * tvrecv)
 {
     double rtt;
     int hlen1, icmplen;
@@ -320,7 +402,7 @@ int procV4(myRTT4 * r,char *recvbuf, int len,struct timeval * tvrecv)
         tvsend = (struct timeval*)icmp->icmp_data;
         tv_sub(tvrecv, tvsend);
         rtt = tvrecv->tv_sec * 1000.0+(tvrecv->tv_usec / 1000.0);
-        r->rtt[icmp->icmp_seq] = rtt;
+        r->rtt = rtt;
         r->rcv_cnt++;
         return 1;
     }
@@ -336,8 +418,12 @@ void tv_sub(struct timeval *out, struct timeval *in)
     }
      out->tv_sec -= in->tv_sec;
 }
-void send_packetV6(int seq,myRTT6 * r)
+int send_packetV6(int seq,myRTT * r)
 {
+  struct sockaddr_in6 other;
+  other.sin6_family = AF_INET6;
+  inet_pton(AF_INET6,r->addr,&(other.sin6_addr));
+  other.sin6_port = htons(0);
    int sockfd = r->sockfd;
    int i, packsize;
    char sendpacket [BUFSIZE];
@@ -353,16 +439,18 @@ void send_packetV6(int seq,myRTT6 * r)
    tval = (struct timeval*)(icmp6+1);
    gettimeofday(tval, NULL);
    packsize = 8+datalen;
-   if (sendto(sockfd,sendpacket, packsize, 0,(struct sockaddr *)&(r->dest), sizeof((r->dest))) < 0)
+   if (sendto(sockfd,sendpacket, packsize, 0,(struct sockaddr *)&other, sizeof(other)) < 0)
    {
        if(errno==EWOULDBLOCK){
-           //die("timeout",1);
-           return;
+           die("timeout",1);
+           return -1;
        }
         perror("sendto error");
+        return -1;
    }
+   return 1;
 }
-void recv_packetV6(myRTT6 * r)
+void recv_packetV6(myRTT * r)
 {
     struct sockaddr_in6 cli;
     int n, clilen;
@@ -371,11 +459,12 @@ void recv_packetV6(myRTT6 * r)
     if ((n = recvfrom(r->sockfd,recvpacket,sizeof(recvpacket),0,(struct sockaddr*)&cli,&clilen)) < 0)
         {
             if(errno==EWOULDBLOCK){
-                //die("timeout",1);
+                die("timeout",1);
                 r->rcv_cnt++;
                 return;
             }
-            perror("recvfrom error");
+            printf("%s %d\n", r->addr,r->rcv_cnt);
+           die("recvfrom error",1);
            return;
         }
     struct timeval tvrecv;
@@ -384,7 +473,7 @@ void recv_packetV6(myRTT6 * r)
         //die("Failed to process packet",1);
     }
 }
-int procV6(myRTT6 * r,char *recvbuf, int len,struct timeval * tvrecv)
+int procV6(myRTT * r,char *recvbuf, int len,struct timeval * tvrecv)
 {
     double rtt;
     struct icmp6_hdr *icmp6;
@@ -402,7 +491,7 @@ int procV6(myRTT6 * r,char *recvbuf, int len,struct timeval * tvrecv)
       tvsend = (struct timeval*)(icmp6+1);
       tv_sub(tvrecv, tvsend);
       rtt = tvrecv->tv_sec * 1000.0+ (tvrecv->tv_usec / 1000.0);
-      r->rtt[icmp6->icmp6_seq] = rtt;
+      r->rtt = rtt;
       r->rcv_cnt++;
       return 1;
     }else{
@@ -410,24 +499,13 @@ int procV6(myRTT6 * r,char *recvbuf, int len,struct timeval * tvrecv)
     }
 }
 
-void printStatsV4(myRTT4 * r){
-  printf("HOST: %-40s\t",r->addr);
+void printStats(myRTT * r,char * addr){
+  printf("HOST(IPv%d): %-40s\t",r[0].ipv,addr);
   for(int i=0;i<PERHOSTLIM;i++){
-    if(r->rtt[i]==-1){
-    printf("RTT(%d) = **** ms\t",i+1 );
+    if(r[i].rtt==-1){
+      printf("RTT(%d) = **** ms\t",i+1 );
     }else{
-    printf("RTT(%d) = %.3f ms\t",i+1 ,r->rtt[i]);
-    }
-  }
-  puts("\n");
-}
-void printStatsV6(myRTT6 * r){
-  printf("HOST: %-40s\t",r->addr);
-  for(int i=0;i<PERHOSTLIM;i++){
-    if(r->rtt[i]==-1){
-    printf("RTT(%d) = **** ms\t",i+1 );
-    }else{
-    printf("RTT(%d) = %.3f ms\t",i+1 ,r->rtt[i]);
+      printf("RTT(%d) = %.3f ms\t",i+1 ,r[i].rtt);
     }
   }
   puts("\n");
