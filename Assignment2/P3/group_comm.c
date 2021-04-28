@@ -43,8 +43,8 @@ typedef struct Groups
 
 typedef struct packet
 {
-	char msg[MSGBUFSIZE];
-	int init_time;         // the time at which the initiating packet was formed
+    char msg[MSGBUFSIZE];
+    int init_time;         // the time at which the initiating packet was formed
     int group_id;
     struct in_addr original_sender; // needed for the unicast communication and downloading/uploading of file
     int type;   // 0 for normal message, 1 for search file, 2 for vote, 3 for create_group notif
@@ -150,13 +150,7 @@ void refresh_group_info()                  //rcv broadcast till all the group up
     printf("Finished retrieving the group information on the network\n");
     pthread_mutex_unlock(&input);
 }
-void refresh_file_info()                  // I would like to incremental updates, see if you can use something
-                                          // other than a hash type function to check if file exists. I don't want that
-                                          // as I use a lot of global segment space for differnt things already
-                                          // I can't take incremental updates right now because the order
-                                          // in which these are retreived is alphabetic and thus there is a problem
-                                          // if someone creates a file which is in between the already catalogued files
-                                          // or if catalogued files get deleted by the user sometime after being catalogued
+void refresh_file_info()           
 {
     struct dirent *de ;
     DIR *dr = opendir(".");
@@ -362,10 +356,10 @@ void search_group()
     if(choice==-1)
     {
         printf("Here are all the groups in the following format\n");
-        printf("Name\t Group ID\t IP\t port\n");
+        printf("Name\t\t Group ID\t IP\t\t port\n\n\n");
         for(int i=0; i < group_index; i++)
         {
-            printf("%s\t %d\t %s\t %d\n", groups[i].name, groups[i].group_id, groups[i].ip, PORT1);
+            printf("%s\t\t %d\t %s\t\t %d\n", groups[i].name, groups[i].group_id, groups[i].ip, PORT1);
         }
         pthread_mutex_unlock(&input);
         return;
@@ -409,7 +403,7 @@ void send_msg()
         pthread_mutex_unlock(&input);
         return;
     }
-    printf("Please type the message you want to send (< 256 characters) \n");
+    printf("Please type the message you want to send (< 1000 characters) \n");
     scanf("%[^\n]", msg);getchar();
     if (sigprocmask(SIG_UNBLOCK, &alarm_mask, NULL) == -1)
                     die("Couldn't unblock SIGALRM\n");
@@ -428,7 +422,7 @@ void send_msg()
     int nbytes = sendto(my_fd, send_grp, sizeof(packet), 0, (const struct sockaddr *)&dst_addr, sizeof(dst_addr));
     free(msg);
 }
-int search_file(char* filename)             // download part remains
+int search_file(char* filename)             
 {
     refresh_file_info();
     int found = file_exists(filename, 1);
@@ -440,7 +434,7 @@ int search_file(char* filename)             // download part remains
         return 1;
     }
     pthread_mutex_lock(&input);
-    printf("The file was not found in this system only.\nTrying to find it on the network\n");
+    printf("The file was not found in this system.\nTrying to find it on the network\n");
     struct timeval struct_time;
     gettimeofday(&struct_time, NULL);
 
@@ -467,7 +461,7 @@ int search_file(char* filename)             // download part remains
     if (sigprocmask(SIG_BLOCK, &alarm_mask, NULL) == -1)
                     die("Couldn't block SIGALRM\n");
    
-    printf("Waiting for 60 seconds to recieve reply of other users for the queried file\n");
+    printf("Waiting for 60 seconds to receive reply of other users for the queried file\n");
     pthread_mutex_unlock(&input);
 
     int addrlen = sizeof(uni_recv_addr);
@@ -487,15 +481,15 @@ int search_file(char* filename)             // download part remains
         }
         if(FD_ISSET(uni_fd, &rset))
         {   
-            memset(&recv_indi, 0 , sizeof(recv_indi));
+            memset(recv_indi, 0 , sizeof(packet));
             if(recvfrom(uni_fd, recv_indi, sizeof(packet), 0, (struct sockaddr*)&uni_recv_addr, &addrlen) <= 0)
             continue;
             if(strcmp(recv_indi->msg, filename)== 0 && recv_indi->type==1)
             {
-                int out_fd = open("output.c",O_RDWR|O_CREAT,0777);
+                int out_fd = open(filename,O_RDWR|O_CREAT,0777);
                 char buf[1000];
                 pthread_mutex_lock(&input);
-                printf("Donwloading the file, Please wait...\n");
+                printf("Downloading the file, Please wait...\n");
                 int ret;
                 found = 1;
                 errno = 0;
@@ -504,22 +498,11 @@ int search_file(char* filename)             // download part remains
                     errno = 0;
                     write(out_fd, buf, ret);
                 }
-                if(errno == EAGAIN)
-                {
-                    printf("ret: %d \n", ret);
-                    printf("The file was found on the network but could not be downloaded properly\n");
-                    pthread_mutex_unlock(&input);
-                    if (sigprocmask(SIG_UNBLOCK, &alarm_mask, NULL) == -1)
-                        die("Couldn't unblock SIGALRM\n");
-   
-                    return 0;
-                }
                 pthread_mutex_unlock(&input);
                 break;
             }
             else
             {
-                printf("Bakwas message\n");
                 continue;
             }       
         }
@@ -576,6 +559,7 @@ void start_vote()
     dst_addr.sin_port = htons(PORT1);
     struct timeval struct_time;
     gettimeofday(&struct_time, NULL);
+    favor = 0; against = 0;
     populate_packet(send_grp, msg, struct_time.tv_sec, group_id,my_addr.sin_addr, 2);
     int nbytes = sendto(my_fd, send_grp, sizeof(packet), 0, (const struct sockaddr *)&dst_addr, sizeof(dst_addr));
     if (sigprocmask(SIG_BLOCK, &alarm_mask, NULL) == -1)
@@ -589,13 +573,13 @@ void start_vote()
     sprintf(msg, "There were %d votes in favor and %d votes in against\n", favor, against);
     gettimeofday(&struct_time, NULL);
     populate_packet(send_grp, msg, struct_time.tv_sec, group_id,my_addr.sin_addr, 0);
+    favor = 0; against = 0;
     nbytes = sendto(my_fd, send_grp, sizeof(packet), 0, (const struct sockaddr *)&dst_addr, sizeof(dst_addr));
     
    
    if (sigprocmask(SIG_UNBLOCK, &alarm_mask, NULL) == -1)
         die("Couldn't unblock SIGALRM\n");
      
-    favor = 0; against = 0;
     pthread_mutex_unlock(&input);
 
     free(msg);
@@ -662,14 +646,14 @@ void* RecvMsg()        //remaining the upload thread part
                         while((ret = read(in_fd,buf,1000)) > 0)
                             {
                                nbytes = sendto(uni_fd,buf, ret , 0, (const struct sockaddr *)&recv_addr, sizeof(recv_addr));
-                               printf("this much was sent in a chunk %d\n", nbytes );
+                               //printf("this much was sent in a chunk %d\n", nbytes );
                                filebyte+=ret;
                             }
                             if(errno == EAGAIN)
                             {
                                 printf("The file was found on the system and requested but could not be read properly\n");
                             }
-                          printf("This is the sent data size: %d\n", filebyte);
+                        //printf("This is the sent data size: %d\n", filebyte);
                     }
                 }
                 break;
@@ -685,11 +669,10 @@ void* RecvMsg()        //remaining the upload thread part
                 char * user_IP = malloc(sizeof(char)*MAXIPSIZE) ;
                 inet_ntop(AF_INET, &(rcv_grp->original_sender),user_IP, MAXIPSIZE);
                 pthread_mutex_lock(&input);
-                 if (sigprocmask(SIG_BLOCK, &alarm_mask, NULL) == -1)
+                if (sigprocmask(SIG_BLOCK, &alarm_mask, NULL) == -1)
                     die("Couldn't block SIGALRM\n");
                
                 printf("User: %s from Group: %s initiated a poll on the following matter: \n",user_IP , groups[index].name);
-                favor = 0; against = 0;
                 printf("%s\n\n" ,buf);
                 printf("Please type y if you are in favor and n if you are against within 30 seconds.\n");
                 scanf("%s" ,buf);
@@ -707,7 +690,6 @@ void* RecvMsg()        //remaining the upload thread part
                     int index = find_group(group_id);
                     recv_addr.sin_addr.s_addr = inet_addr(groups[index].ip);
                     populate_packet(rcv_grp, buf, rcv_grp->init_time, group_id ,sender, 3);
-
                     int nbytes = sendto(my_fd, rcv_grp, sizeof(packet), 0, (const struct sockaddr *)&recv_addr, sizeof(recv_addr));
                      /* code */
                 }
@@ -725,6 +707,7 @@ void* RecvMsg()        //remaining the upload thread part
                 struct timeval struct_time;
                 gettimeofday(&struct_time, NULL);
                 int now = struct_time.tv_sec;
+                
                 if(((now - rcv_grp->init_time) < 30) && rcv_grp->original_sender.s_addr == my_addr.sin_addr.s_addr)
                 {
                     if (strcmp(rcv_grp->msg, "y")==0)
@@ -741,8 +724,8 @@ void* RecvMsg()        //remaining the upload thread part
             case 4: // request data msg
             {
                 if((rcv_grp->original_sender).s_addr==my_addr.sin_addr.s_addr)
-                    break;  
-                printf("Someone has Requested Data\n");
+                   break;  
+                //printf("Someone has Requested Data\n");
                 share_data(1, &recv_addr ,rcv_grp);
                 break;
             }
@@ -750,7 +733,7 @@ void* RecvMsg()        //remaining the upload thread part
             {
                 if((rcv_grp->original_sender).s_addr==my_addr.sin_addr.s_addr)
                     break;
-                printf("Updated Data Received\n");
+                printf("Some updated Data Received\n");
                 char buf[MSGBUFSIZE];
                 strcpy(buf, rcv_grp->msg);
                 char* token = malloc(sizeof(char)*MAXFILENAME) ;
@@ -758,7 +741,10 @@ void* RecvMsg()        //remaining the upload thread part
                 while( token != NULL && net_file_index < MAXFILENET )
                 {
                     if(file_exists(token, 1)==1)
-                    {token = strtok(NULL, delim);continue;}
+                    {
+                       // printf("%s\n",token );
+                        token = strtok(NULL, delim);continue;
+                    }
                     strcpy(net_filename[net_file_index],token);
                     net_file_index++;
                     token = strtok(NULL, delim);
@@ -881,7 +867,7 @@ int main(int argc, char *argv[])
         return 1;
     }
     struct timeval dum;
-    dum.tv_sec = 5;
+    dum.tv_sec = 2;
     dum.tv_usec = 0;
     u_int yes = 1;
     if (setsockopt(system_fd, SOL_SOCKET, SO_BROADCAST, (char*) &yes, sizeof(yes)) < 0)
@@ -1047,7 +1033,6 @@ int main(int argc, char *argv[])
             {
                 if(sharing)
                 {
-                    printf("Still got interrputed \n");
                     break;
                 }
                 printf("Please select a valid option and type a number between 1-8 corresponding to your choice\n");

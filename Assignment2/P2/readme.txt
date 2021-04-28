@@ -9,6 +9,8 @@ Terminate server using
 
 Test using 
     httperf --port=31415 --num-conns=50 --rate=5
+    
+Sample execution output and httperf report below.
 
 -------------------------------------------------------------------------------
 Sample run:
