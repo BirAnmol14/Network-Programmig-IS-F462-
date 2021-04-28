@@ -33,6 +33,10 @@ typedef struct myRTT{
   int rcv_cnt;
 }myRTT;
 
+typedef struct args{
+  char addr[50];
+  int num;
+}Args;
 pthread_mutex_t count = PTHREAD_MUTEX_INITIALIZER;
 void * manage(void *);
 int getIPVersion(const char *);
@@ -40,12 +44,12 @@ int getNextIP(FILE *,char * );
 int getSocket(int);
 unsigned short cal_chksum(unsigned short *, int);
 void tv_sub(struct timeval *out, struct timeval *in);
-int  send_packetV4(int seq,myRTT*);
-int  send_packetV6(int seq,myRTT*);
-void recv_packetV4(myRTT * r);
-int procV4(myRTT *,char *, int ,struct timeval *);
-void recv_packetV6(myRTT * r);
-int procV6(myRTT *,char *, int ,struct timeval *);
+int  send_packetV4(int seq,myRTT*,int num);
+int  send_packetV6(int seq,myRTT*,int num);
+void recv_packetV4(myRTT * r,int num);
+int procV4(myRTT *,char *, int ,struct timeval *,int num);
+void recv_packetV6(myRTT * r,int num);
+int procV6(myRTT *,char *, int ,struct timeval *,int num);
 void printStats(myRTT *,char *);
 
 void die(const char * msg,int type){
@@ -93,12 +97,17 @@ int main(int argc, char *argv[])
           continue;
         }
         pthread_t t;
-        int retr =pthread_create(&t,NULL,manage,addr);
+        Args * args = malloc(sizeof(Args)*1);
+        strcpy(args->addr,addr);
+        args->num = totalThreads;
+        int retr =pthread_create(&t,NULL,manage,args);
         if(retr== 0){
           pthread_mutex_lock(&count);
           totalThreads++;
           pthread_mutex_unlock(&count);
         }
+        free(addr);
+
     }
     while(1){
         pthread_mutex_lock(&count);
@@ -122,8 +131,10 @@ int main(int argc, char *argv[])
    printf("Total time taken=> %d mins: %d secs: %ld ms\n",mins,sec,(end.tv_usec)/1000);
    return 0;
 }
-void * manage(void * args){
-      char * addr = (char *)args;
+void * manage(void * arg){
+      Args * args = (Args *)arg;
+      char * addr = args->addr;
+      int num = args->num;
       pthread_detach(pthread_self());
       if(addr==NULL || strlen(addr)<=0){
         pthread_mutex_lock(&count);
@@ -153,6 +164,10 @@ void * manage(void * args){
         pthread_exit(0);
       }
       myRTT r[PERHOSTLIM];
+      int closed[PERHOSTLIM];
+      for(int i=0;i<PERHOSTLIM;i++){
+        closed[i]=0;
+      }
       pthread_mutex_lock(&count);
       if(type==4)
         totalv4++;
@@ -182,7 +197,7 @@ void * manage(void * args){
               if (errno == EINTR)
                 continue;
               else
-                die("epoll_wait",1);
+                //die("epoll_wait",1);
                 break;
             }
             if(ready == 0){
@@ -195,46 +210,54 @@ void * manage(void * args){
                     //Send Packets
                     int ret;
                     if(r->ipv==4){
-                        ret=send_packetV4(r->seq,r);
+                        ret=send_packetV4(r->seq,r,num);
                     }else{
-                      ret=send_packetV6(r->seq,r);
+                      ret=send_packetV6(r->seq,r,num);
                     }
                     if(ret == 1){
                       ev.events = EPOLLIN;
                       ev.data.ptr = r;
-                      if (epoll_ctl (epfd, EPOLL_CTL_MOD, r->sockfd, &ev) == -1){die("epoll_ctl error",1);}
+                      if (epoll_ctl (epfd, EPOLL_CTL_MOD, r->sockfd, &ev) == -1){die("epoll_ctl error1",1);}
                     }
                     else{
                       ev.events = EPOLLOUT;
                       ev.data.ptr = r;
-                      if (epoll_ctl (epfd, EPOLL_CTL_DEL, r->sockfd, &ev) == -1){die("epoll_ctl error",1);}
+                      //if (epoll_ctl (epfd, EPOLL_CTL_DEL, r->sockfd, &ev) == -1){die("epoll_ctl error2",1);}
                       close(r->sockfd);
+                      closed[r->seq]=1;
                       total++;
                     }
                 }
                 else if(evlist[i].events & EPOLLIN){
                     myRTT * r = (myRTT *)evlist[i].data.ptr;
-                    //Send Packets
+                    //Recv Packets
                     if(r->ipv==4){
-                        recv_packetV4(r);
+                        recv_packetV4(r,num);
                     }else{
-                      recv_packetV6(r);
+                      recv_packetV6(r,num);
                     }
-                    if(r->rcv_cnt>=1){
+                    if(r->rcv_cnt>=1&&!closed[r->seq]){
                       ev.events = EPOLLIN;
                       ev.data.ptr = r;
-                      if (epoll_ctl (epfd, EPOLL_CTL_DEL, r->sockfd, &ev) == -1){die("epoll_ctl error",1);}
+                      //if (epoll_ctl (epfd, EPOLL_CTL_DEL, r->sockfd, &ev) == -1){die("epoll_ctl error",1);}
                       close(r->sockfd);
+                      closed[r->seq] = 1;
                       total++;
                     }
                 }
             }
       }
       pthread_mutex_lock(&count);
+      for(int i=0;i<PERHOSTLIM;i++){
+        if(closed[i]==0){
+          close(r[i].sockfd);
+          closed[i]=1;
+        }
+      }
       printStats(r,addr);
       totalThreads--;
       close(epfd);
-      free(addr);
+      free(args);
       pthread_mutex_unlock(&count);
       pthread_exit(0);
 }
@@ -318,7 +341,7 @@ unsigned short cal_chksum(unsigned short *addr, int len)
     return answer;
 }
 
-int send_packetV4(int seq,myRTT * r)
+int send_packetV4(int seq,myRTT * r,int num)
 {
     struct sockaddr_in other;
     other.sin_family = AF_INET;
@@ -334,7 +357,7 @@ int send_packetV4(int seq,myRTT * r)
    icmp->icmp_code = 0;
    icmp->icmp_cksum = 0;
    icmp->icmp_seq = seq;
-   icmp->icmp_id = getpid();
+   icmp->icmp_id = num;
    packsize = 8+datalen;
    memset(icmp->icmp_data,0xa5,datalen);
    tval = (struct timeval*)icmp->icmp_data;
@@ -351,7 +374,7 @@ int send_packetV4(int seq,myRTT * r)
    }
    return 1;
 }
-void recv_packetV4(myRTT * r)
+void recv_packetV4(myRTT * r,int num)
 {
     struct sockaddr_in cli;
     char recvpacket [BUFSIZE];
@@ -370,11 +393,12 @@ void recv_packetV4(myRTT * r)
          }
     struct timeval tvrecv;
     gettimeofday(&tvrecv, NULL);
-    if (procV4(r,recvpacket, n,&tvrecv) < 0){
+    if (procV4(r,recvpacket, n,&tvrecv,num) < 0){
         //die("Failed to process packet",1);
+        r->rcv_cnt = 0;
     }
 }
-int procV4(myRTT * r,char *recvbuf, int len,struct timeval * tvrecv)
+int procV4(myRTT * r,char *recvbuf, int len,struct timeval * tvrecv,int num)
 {
     double rtt;
     int hlen1, icmplen;
@@ -394,7 +418,7 @@ int procV4(myRTT * r,char *recvbuf, int len,struct timeval * tvrecv)
         return  -1;
     }
 
-    if ((icmp->icmp_type == ICMP_ECHOREPLY) && (icmp->icmp_id == getpid()))
+    if ((icmp->icmp_type == ICMP_ECHOREPLY) && (icmp->icmp_id == num))
     {
         if(icmplen < 16){
           printf("ICMP packets\'s length is less than 16, Not enough to be processed\n");
@@ -419,7 +443,7 @@ void tv_sub(struct timeval *out, struct timeval *in)
     }
      out->tv_sec -= in->tv_sec;
 }
-int send_packetV6(int seq,myRTT * r)
+int send_packetV6(int seq,myRTT * r,int num)
 {
   struct sockaddr_in6 other;
   other.sin6_family = AF_INET6;
@@ -434,7 +458,7 @@ int send_packetV6(int seq,myRTT * r)
    icmp6->icmp6_type = ICMP6_ECHO_REQUEST;
    icmp6->icmp6_code = 0;
    icmp6->icmp6_seq = seq;
-   icmp6->icmp6_id = getpid();
+   icmp6->icmp6_id = num;
    //checksum handled by kernel for us
    memset((icmp6+1),0xa5,datalen);
    tval = (struct timeval*)(icmp6+1);
@@ -451,7 +475,7 @@ int send_packetV6(int seq,myRTT * r)
    }
    return 1;
 }
-void recv_packetV6(myRTT * r)
+void recv_packetV6(myRTT * r,int num)
 {
     struct sockaddr_in6 cli;
     int n, clilen;
@@ -470,11 +494,12 @@ void recv_packetV6(myRTT * r)
         }
     struct timeval tvrecv;
     gettimeofday(&tvrecv, NULL);
-    if (procV6(r,recvpacket, n,&tvrecv) < 0){
+    if (procV6(r,recvpacket, n,&tvrecv,num) < 0){
         //die("Failed to process packet",1);
+        r->rcv_cnt=0;
     }
 }
-int procV6(myRTT * r,char *recvbuf, int len,struct timeval * tvrecv)
+int procV6(myRTT * r,char *recvbuf, int len,struct timeval * tvrecv,int num)
 {
     double rtt;
     struct icmp6_hdr *icmp6;
@@ -484,7 +509,7 @@ int procV6(myRTT * r,char *recvbuf, int len,struct timeval * tvrecv)
       printf("ICMP packets\'s length is less than 8\n");
       return  -1;
     }
-    if((icmp6->icmp6_type == ICMP6_ECHO_REPLY) && icmp6->icmp6_id == getpid()){
+    if((icmp6->icmp6_type == ICMP6_ECHO_REPLY) && icmp6->icmp6_id == num){
       if(len < 16){
         printf("ICMP packets\'s length is less than 16, Not enough to be processed\n");
         return -1;
