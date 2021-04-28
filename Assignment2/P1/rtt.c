@@ -99,7 +99,7 @@ int main(int argc, char *argv[])
         pthread_t t;
         Args * args = malloc(sizeof(Args)*1);
         strcpy(args->addr,addr);
-        args->num = totalThreads;
+        args->num = totalThreads*PERHOSTLIM;
         int retr =pthread_create(&t,NULL,manage,args);
         if(retr== 0){
           pthread_mutex_lock(&count);
@@ -210,9 +210,9 @@ void * manage(void * arg){
                     //Send Packets
                     int ret;
                     if(r->ipv==4){
-                        ret=send_packetV4(r->seq,r,num);
+                        ret=send_packetV4(r->seq,r,num+r->seq);
                     }else{
-                      ret=send_packetV6(r->seq,r,num);
+                      ret=send_packetV6(r->seq,r,num+r->seq);
                     }
                     if(ret == 1){
                       ev.events = EPOLLIN;
@@ -232,9 +232,9 @@ void * manage(void * arg){
                     myRTT * r = (myRTT *)evlist[i].data.ptr;
                     //Recv Packets
                     if(r->ipv==4){
-                        recv_packetV4(r,num);
+                        recv_packetV4(r,num+r->seq);
                     }else{
-                      recv_packetV6(r,num);
+                      recv_packetV6(r,num+r->seq);
                     }
                     if(r->rcv_cnt>=1&&!closed[r->seq]){
                       ev.events = EPOLLIN;
@@ -357,7 +357,7 @@ int send_packetV4(int seq,myRTT * r,int num)
    icmp->icmp_code = 0;
    icmp->icmp_cksum = 0;
    icmp->icmp_seq = seq;
-   icmp->icmp_id = num;
+   icmp->icmp_id = htons(num);
    packsize = 8+datalen;
    memset(icmp->icmp_data,0xa5,datalen);
    tval = (struct timeval*)icmp->icmp_data;
@@ -418,7 +418,7 @@ int procV4(myRTT * r,char *recvbuf, int len,struct timeval * tvrecv,int num)
         return  -1;
     }
 
-    if ((icmp->icmp_type == ICMP_ECHOREPLY) && (icmp->icmp_id == num))
+    if ((icmp->icmp_type == ICMP_ECHOREPLY) && (ntohs(icmp->icmp_id) == num))
     {
         if(icmplen < 16){
           printf("ICMP packets\'s length is less than 16, Not enough to be processed\n");
