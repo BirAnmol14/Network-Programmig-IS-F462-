@@ -134,8 +134,8 @@ void childMain(int pipe, int lsock) {
     // EPOLLEXCLUSIVE flag handles thundering herd problem
     // EPOLLIN event delivered to only one process
     struct epoll_event evsock;
-    evsock.events = EPOLLIN | EPOLLEXCLUSIVE;
-    // evsock.events = EPOLLIN;
+    evsock.events = EPOLLIN;
+    // evsock.events = EPOLLIN | EPOLLEXCLUSIVE;
     evsock.data.fd = lsock;
     if(epoll_ctl(epfd, EPOLL_CTL_ADD, lsock, &evsock) == -1)
         errExit("epoll_ctl", 1);
@@ -336,6 +336,8 @@ int main(int argc, char* argv[]) {
     printf("minSpareServers: %d\nmaxSpareServers: %d\nmaxRequestsPerChild: %d\n", minSpareServers, maxSpareServers, maxRequestsPerChild);
 
     int lsock = initializeListenSock();    
+    printf("Listening on port %d...\n", serverPort);
+    printf("Creating server process pool...\n");
 
     s = newServerArray(minSpareServers);
     int epfd = epoll_create(minSpareServers);
