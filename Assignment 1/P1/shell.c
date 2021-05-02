@@ -967,9 +967,10 @@ char* searchPath(char * cmd){
 int end=0;
 int cmd_index=-1;
 void handleShortcut(ipStream * st,shortCmds * sc){
+	
   if(st && st->head){
     Node * t = st->head;
-    if(t->tok==CMD1 && strcmp(t->lex,"sc")==0 && t->next==NULL){
+    if(t->tok==CMD1 && strcmp(t->lex,"sc")==0){
       if(!t->next){
         while(1){
           struct sigaction s_act;
@@ -1076,6 +1077,7 @@ void handleShortcut(ipStream * st,shortCmds * sc){
           clearStream(st);
           free(readBuf);
         }
+		end = 0;
         write(fileno(stdout),"Shortcut Mode Disabled\n",strlen("Shortcut Mode Disabled\n"));
         signal(SIGINT,SIG_DFL);
       }else{
@@ -1139,7 +1141,7 @@ void shortINT(int signo){
     }
     else if(cmdi == -1){
         signal(SIGINT,SIG_DFL);
-          end = 1;
+        end = 1;
     }
   }
 }

@@ -99,7 +99,9 @@ int main(int argc, char *argv[])
         pthread_t t;
         Args * args = malloc(sizeof(Args)*1);
         strcpy(args->addr,addr);
-        args->num = totalThreads*PERHOSTLIM;
+        pthread_mutex_lock(&count);
+        args->num = (totalv4+totalv6)*PERHOSTLIM;
+        pthread_mutex_unlock(&count);
         int retr =pthread_create(&t,NULL,manage,args);
         if(retr== 0){
           pthread_mutex_lock(&count);
